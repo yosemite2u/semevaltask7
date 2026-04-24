@@ -1,12 +1,4 @@
 # -*- coding: utf-8 -*-
-"""
-SemEval-2026 Task 7 - Track 2 (MCQ) Dynamic Routing Script (task3.py)
-----------------------------------------------------------
-提分核心: Dynamic Routing (动态路由) + 强弱策略互补
-特性: 
-  - 针对低资源/易受偏见地区: 采用 Task 2 (Anti-Bias CoT + 3x Voting, temp=0.5)
-  - 针对高资源/欧美常识地区: 采用 Vanilla (Direct Answer, temp=0.0)，防止过度思考
-"""
 
 import os
 import pandas as pd
@@ -14,41 +6,28 @@ import threading
 import time
 import shutil
 import re
-import zipfile
 import csv
 import collections
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 from openai import OpenAI
 
-# ================= 配置区域 =================
-
-API_KEY = "sk-142284ab660c44f1980f69db584b56df"
+API_KEY = "YOUR API"
 API_BASE = "https://api.deepseek.com"
 MODEL_NAME = "deepseek-chat"
-MAX_WORKERS = 50  # 恢复 50 并发极速 API 跑分
-VOTING_ROUNDS = 3 # 复杂路由的投票次数
+MAX_WORKERS = 50
+VOTING_ROUNDS = 3
 
 INPUT_DIR = "."
-OUTPUT_DIR = "./prediction_task3_routing"  # 独立输出目录
-ZIP_NAME = "prediction_task3_routing.zip"
+OUTPUT_DIR = "./prediction_task3_routing"
 TEMP_TSV_PATH = os.path.join(OUTPUT_DIR, "temp_results.tsv")
 FINAL_TSV_PATH = os.path.join(OUTPUT_DIR, "track_2_mcq_prediction.tsv")
 
-# ================= 动态路由名单 (核心灵魂) =================
-# 基于两次消融实验的 Error Analysis 严格筛选
-# 只有在这些地区，复杂策略 (Task 2) 的得分稳定高于或等于纯净版 (Vanilla)
 COMPLEX_REASONING_REGIONS = {
-    "am-ET",  # 埃塞俄比亚 (涨20%)
-    "zh-CN",  # 中国大陆 (涨5%)
-    "zh-SG",  # 新加坡华人 (涨5%)
-    "ar-DZ",  # 阿尔及利亚 (涨10%)
-    "ar-SA",  # 沙特阿拉伯 (涨5%)
-    "as-AS",  # 印度阿萨姆 (涨5%)
-    "ha-NG"   # 尼日利亚 (保持70%，需防范偏见)
+    "am-ET", "zh-CN", "zh-SG", "ar-DZ",
+    "ar-SA", "as-AS", "ha-NG"
 }
 
-# ================= 全量文化映射表 =================
 CULTURE_MAP = {
     "am-ET": "Ethiopia", "ar-DZ": "Algeria", "ar-EG": "Egypt", 
     "ar-MA": "Morocco", "ar-SA": "Saudi Arabia", "ha-NG": "Nigeria (Hausa Culture)", 
@@ -69,8 +48,6 @@ CULTURE_MAP = {
 
 client = OpenAI(api_key=API_KEY, base_url=API_BASE)
 file_lock = threading.Lock() 
-
-# ================= 核心工具函数 =================
 
 def get_culture_context(row_id):
     row_id = str(row_id)
@@ -113,8 +90,6 @@ def write_result_realtime(result_row):
             writer = csv.writer(f, delimiter='\t')
             writer.writerow(result_row)
 
-# ================= Track 2: MCQ 动态路由逻辑 =================
-
 def process_mcq_row(row, col_map):
     qid = str(row[col_map['id']])
     prefix = qid.split('_')[0]
@@ -128,9 +103,7 @@ def process_mcq_row(row, col_map):
     options_text = f"A: {opt_a}\nB: {opt_b}\nC: {opt_c}\nD: {opt_d}"
     region = get_culture_context(qid)
     
-    # ================= 路由分发机制 =================
     if prefix in COMPLEX_REASONING_REGIONS:
-        # 🟢 路由 A: 复杂策略 (Anti-Bias CoT + 3x Voting)
         system_prompt = (
             f"You are an elite indigenous cultural anthropologist specializing in {region}. "
             f"Your task is to identify the option that most authentically reflects the historical, traditional, and daily realities of {region}.\n\n"
@@ -153,7 +126,6 @@ def process_mcq_row(row, col_map):
         final_choice = collections.Counter(votes).most_common(1)[0][0]
         
     else:
-        # 🔵 路由 B: 极简策略 (Vanilla Direct Answer)
         system_prompt = "You are a helpful AI assistant."
         user_prompt = f"Question: {question}\nOptions:\n{options_text}\n\nSelect the correct option. Output ONLY the letter of the correct option inside double brackets, e.g., [[A]]."
         
@@ -162,7 +134,6 @@ def process_mcq_row(row, col_map):
         pred_text = call_api_with_retry(messages, temp=0.0)
         final_choice = extract_answer_from_text(pred_text)
 
-    # 格式化输出
     mapping = {'A': [1,0,0,0], 'B': [0,1,0,0], 'C': [0,0,1,0], 'D': [0,0,0,1]}
     result_vec = mapping.get(final_choice, [1,0,0,0])
     
@@ -170,8 +141,6 @@ def process_mcq_row(row, col_map):
     write_result_realtime(final_row)
     
     return final_row
-
-# ================= 主流程 =================
 
 def main():
     if not os.path.exists(OUTPUT_DIR):
@@ -184,11 +153,11 @@ def main():
     input_file = os.path.join(INPUT_DIR, "mini_input.tsv")
     
     if not os.path.exists(input_file):
-        print(f"❌ 错误：未找到 {input_file}")
+        print(f"Error: {input_file} not found.")
         return
 
-    print(f"🚀 启动 SemEval Track 2 动态路由推理 (task3.py)")
-    print(f"模式: Dynamic Routing (Task2 + Vanilla) | 并发: {MAX_WORKERS}")
+    print("Starting Track 2 Dynamic Routing Inference...")
+    print(f"Workers: {MAX_WORKERS}")
 
     try:
         df = pd.read_csv(input_file, sep='\t', dtype=str)
@@ -210,16 +179,16 @@ def main():
         col_map['D'] = find_opt_col('D') or df.columns[5]
         
     except Exception as e:
-        print(f"❌ 读取 TSV 失败: {e}")
+        print(f"Error reading TSV: {e}")
         return
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = [executor.submit(process_mcq_row, row, col_map) for _, row in df.iterrows()]
         
-        for _ in tqdm(as_completed(futures), total=len(futures), desc="Reasoning (Dynamic Routing)"):
+        for _ in tqdm(as_completed(futures), total=len(futures), desc="Processing"):
             pass
             
-    print("\n✅ 所有推理计算已完成，正在整理最终文件...")
+    print("\nInference complete. Merging results...")
 
     try:
         df_res = pd.read_csv(TEMP_TSV_PATH, sep='\t', dtype={'id': str})
@@ -231,17 +200,15 @@ def main():
             df_res = df_res.sort_values('id')
             
         df_res.to_csv(FINAL_TSV_PATH, sep='\t', index=False)
-        print(f"📄 最终文件已生成: {FINAL_TSV_PATH}")
+        print(f"Output saved to: {FINAL_TSV_PATH}")
         
         if os.path.exists(TEMP_TSV_PATH):
             os.remove(TEMP_TSV_PATH)
             
     except Exception as e:
-        print(f"⚠️ 排序步骤出错: {e}")
+        print(f"Error during sorting: {e}")
         if os.path.exists(TEMP_TSV_PATH):
             shutil.copy(TEMP_TSV_PATH, FINAL_TSV_PATH)
-
-    print(f"🎉 task3 (动态路由版) 跑分已完成，请使用 eval 脚本验证分数。")
 
 if __name__ == "__main__":
     main()
