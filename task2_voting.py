@@ -1,10 +1,4 @@
 # -*- coding: utf-8 -*-
-"""
-SemEval-2026 Task 7 - Track 2 (MCQ) Voting Script (task2_voting.py)
-----------------------------------------------------------
-提分核心: Self-Consistency (多数表决) + Anti-Western Bias Prompt
-特性: 每道题在 temp=0.5 下独立思考 3 次，取众数作为最终答案
-"""
 
 import os
 import pandas as pd
@@ -12,28 +6,23 @@ import threading
 import time
 import shutil
 import re
-import zipfile
 import csv
 import collections
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 from openai import OpenAI
 
-# ================= 配置区域 =================
-
-API_KEY = "sk-142284ab660c44f1980f69db584b56df"
+API_KEY = os.getenv("API_KEY", "YOUR_API_KEY_HERE")
 API_BASE = "https://api.deepseek.com"
 MODEL_NAME = "deepseek-chat"
-MAX_WORKERS = 50  # 并发数
-VOTING_ROUNDS = 3 # 每道题思考/投票的次数 (经典值: 3 或 5)
+MAX_WORKERS = 50
+VOTING_ROUNDS = 3
 
 INPUT_DIR = "."
-OUTPUT_DIR = "./prediction_task2_voting"  # 独立输出目录
-ZIP_NAME = "prediction_task2_voting.zip"
+OUTPUT_DIR = "./prediction_task2_voting"
 TEMP_TSV_PATH = os.path.join(OUTPUT_DIR, "temp_results.tsv")
 FINAL_TSV_PATH = os.path.join(OUTPUT_DIR, "track_2_mcq_prediction.tsv")
 
-# ================= 全量文化映射表 =================
 CULTURE_MAP = {
     "am-ET": "Ethiopia", "ar-DZ": "Algeria", "ar-EG": "Egypt", 
     "ar-MA": "Morocco", "ar-SA": "Saudi Arabia", "ha-NG": "Nigeria (Hausa Culture)", 
@@ -54,8 +43,6 @@ CULTURE_MAP = {
 
 client = OpenAI(api_key=API_KEY, base_url=API_BASE)
 file_lock = threading.Lock() 
-
-# ================= 核心工具函数 =================
 
 def get_culture_context(row_id):
     row_id = str(row_id)
@@ -80,7 +67,6 @@ def extract_answer_from_cot(text):
     return "A"
 
 def call_api_with_retry(messages, temp=0.5, retries=5):
-    """注意：此处的默认 temperature 已改为 0.5 以增加思维多样性"""
     for i in range(retries):
         try:
             response = client.chat.completions.create(
@@ -99,8 +85,6 @@ def write_result_realtime(result_row):
             writer = csv.writer(f, delimiter='\t')
             writer.writerow(result_row)
 
-# ================= Track 2: MCQ 多数表决逻辑 =================
-
 def process_mcq_row(row, col_map):
     qid = str(row[col_map['id']])
     question = str(row[col_map['question']])
@@ -113,7 +97,6 @@ def process_mcq_row(row, col_map):
     options_text = f"A: {opt_a}\nB: {opt_b}\nC: {opt_c}\nD: {opt_d}"
     region = get_culture_context(qid)
     
-    # 保留 PRO 版的极品 Prompt
     system_prompt = (
         f"You are an elite indigenous cultural anthropologist specializing in {region}. "
         f"Your task is to identify the option that most authentically reflects the historical, traditional, and daily realities of {region}.\n\n"
@@ -131,15 +114,12 @@ def process_mcq_row(row, col_map):
         {"role": "user", "content": user_prompt}
     ]
 
-    # 🔥 核心提分点: 多次推理与多数表决
     votes = []
     for _ in range(VOTING_ROUNDS):
-        pred_text = call_api_with_retry(messages, temp=0.5) # 提高 temp，增加探索域
+        pred_text = call_api_with_retry(messages, temp=0.5) 
         choice = extract_answer_from_cot(pred_text)
         votes.append(choice)
         
-    # 统计得票数最高的结果
-    # most_common(1) 返回类似 [('A', 2)]，[0][0] 获取第一名也就是 'A'
     final_choice = collections.Counter(votes).most_common(1)[0][0]
     
     mapping = {'A': [1,0,0,0], 'B': [0,1,0,0], 'C': [0,0,1,0], 'D': [0,0,0,1]}
@@ -149,8 +129,6 @@ def process_mcq_row(row, col_map):
     write_result_realtime(final_row)
     
     return final_row
-
-# ================= 主流程 =================
 
 def main():
     if not os.path.exists(OUTPUT_DIR):
@@ -163,11 +141,11 @@ def main():
     input_file = os.path.join(INPUT_DIR, "mini_input.tsv")
     
     if not os.path.exists(input_file):
-        print(f"❌ 错误：未找到 {input_file}")
+        print(f"Error: {input_file} not found.")
         return
 
-    print(f"🚀 启动 SemEval Track 2 Voting 级推理 (task2_voting.py)")
-    print(f"模式: Self-Consistency ({VOTING_ROUNDS} votes) | 并发: {MAX_WORKERS}")
+    print("Starting Track 2 Voting Inference...")
+    print(f"Workers: {MAX_WORKERS}")
 
     try:
         df = pd.read_csv(input_file, sep='\t', dtype=str)
@@ -189,17 +167,16 @@ def main():
         col_map['D'] = find_opt_col('D') or df.columns[5]
         
     except Exception as e:
-        print(f"❌ 读取 TSV 失败: {e}")
+        print(f"Error reading TSV: {e}")
         return
 
-    # 因为每道题要调 3 次 API，整体进度条会变慢，属于正常现象
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = [executor.submit(process_mcq_row, row, col_map) for _, row in df.iterrows()]
         
-        for _ in tqdm(as_completed(futures), total=len(futures), desc="Reasoning (Voting)"):
+        for _ in tqdm(as_completed(futures), total=len(futures), desc="Processing"):
             pass
             
-    print("\n✅ 所有投票计算已完成，正在整理最终文件...")
+    print("\nInference complete. Merging results...")
 
     try:
         df_res = pd.read_csv(TEMP_TSV_PATH, sep='\t', dtype={'id': str})
@@ -211,17 +188,15 @@ def main():
             df_res = df_res.sort_values('id')
             
         df_res.to_csv(FINAL_TSV_PATH, sep='\t', index=False)
-        print(f"📄 最终文件已生成: {FINAL_TSV_PATH}")
+        print(f"Output saved to: {FINAL_TSV_PATH}")
         
         if os.path.exists(TEMP_TSV_PATH):
             os.remove(TEMP_TSV_PATH)
             
     except Exception as e:
-        print(f"⚠️ 排序步骤出错: {e}")
+        print(f"Error during sorting: {e}")
         if os.path.exists(TEMP_TSV_PATH):
             shutil.copy(TEMP_TSV_PATH, FINAL_TSV_PATH)
-
-    print(f"🎉 task2 (Voting版) 跑分已完成，请使用 eval 脚本验证分数。")
 
 if __name__ == "__main__":
     main()
