@@ -23,7 +23,7 @@ from openai import OpenAI
 
 # ================= 配置参数 =================
 
-API_KEY = "sk-142284ab660c44f1980f69db584b56df"
+API_KEY = "your api"
 API_BASE = "https://api.deepseek.com"
 MODEL_NAME = "deepseek-chat"
 MAX_WORKERS = 50  # 异步请求并发数
